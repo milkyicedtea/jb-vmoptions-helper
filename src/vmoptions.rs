@@ -8,14 +8,17 @@ use regex::Regex;
 pub(crate) fn find_apps() -> HashMap<String, String> {
     let mut apps: HashMap<String, String> = HashMap::new();
     let path_env = std::env::var("PATH").unwrap_or_default();
-    let re = Regex::new(r#"^"([^"]+/JetBrains/.+/bin/[^"]+)"\s+"\$@""#).unwrap();
 
-    for dir in path_env.split(':') {
-        let dir_path = Path::new(dir);
-        if !dir_path.is_dir() {
+    // Shell wrapper regex (Unix: .sh files)
+    let re_shell = Regex::new(r#"^"([^"]+/JetBrains/.+/bin/[^"]+)"\s+"\$@""#).unwrap();
+    // Batch wrapper regex (Windows: .bat files)
+    let re_batch = Regex::new(r#"^"([^"]+\\JetBrains\\.+\\bin\\[^"]+64\.exe)"\s+"\%~dp0"#).unwrap();
+
+    for dir in std::env::split_paths(&path_env) {
+        if !dir.is_dir() {
             continue;
         }
-        let entries = match fs::read_dir(dir_path) {
+        let entries = match fs::read_dir(&dir) {
             Ok(e) => e,
             Err(_) => continue,
         };
@@ -24,30 +27,56 @@ pub(crate) fn find_apps() -> HashMap<String, String> {
             if !full_path.is_file() {
                 continue;
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = full_path.metadata() {
-                    if meta.permissions().mode() & 0o111 == 0 {
-                        continue;
-                    }
-                }
+            // Cross-platform executable check
+            if !is_executable(&full_path) {
+                continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
             if apps.contains_key(&name) {
                 continue;
             }
             if let Ok(content) = fs::read_to_string(&full_path) {
+                let mut found = None;
                 for line in content.lines() {
-                    if let Some(caps) = re.captures(line.trim()) {
-                        apps.insert(name.clone(), caps[1].to_string());
+                    // Try Unix shell wrapper first
+                    if let Some(caps) = re_shell.captures(line.trim()) {
+                        found = Some(caps[1].to_string());
                         break;
                     }
+                    // Try Windows batch file
+                    if let Some(caps) = re_batch.captures(line.trim()) {
+                        found = Some(caps[1].to_string());
+                        break;
+                    }
+                }
+                if let Some(path) = found {
+                    apps.insert(name.clone(), path);
                 }
             }
         }
     }
     apps
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = path.metadata() {
+        meta.permissions().mode() & 0o111 != 0
+    } else {
+        false
+    }
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    // On Windows, check for known executable/script extensions
+    // JetBrains uses .exe binaries and .bat wrapper scripts
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase());
+    matches!(ext.as_deref(), Some("exe") | Some("bat"))
 }
 
 pub(crate) fn resolve_options_path(binary_path: &str) -> Option<PathBuf> {

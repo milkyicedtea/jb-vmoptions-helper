@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::backend::Backend;
 use ratatui::Terminal;
 
@@ -27,6 +27,9 @@ where
         if event::poll(Duration::from_millis(200))? {
             match event::read()? {
                 Event::Key(key) => {
+                    if key.kind == KeyEventKind::Release {
+                        continue;
+                    }
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {

@@ -11,8 +11,10 @@ pub(crate) fn find_apps() -> HashMap<String, String> {
 
     // Shell wrapper regex (Unix: .sh files)
     let re_shell = Regex::new(r#"^"([^"]+/JetBrains/.+/bin/[^"]+)"\s+"\$@""#).unwrap();
-    // Batch wrapper regex (Windows: .bat files)
-    let re_batch = Regex::new(r#"^"([^"]+\\JetBrains\\.+\\bin\\[^"]+64\.exe)"\s+"\%~dp0"#).unwrap();
+    let re_batch = Regex::new(
+        r#"(?i)^start\s+""(?:\s+%[a-z0-9_]+%)*\s+(?:"([^"]+\\bin\\[^"]+\.exe)"|([a-z]:\\\S+\\bin\\\S+\.exe))(?:\s|$)"#,
+    )
+    .unwrap();
 
     for dir in std::env::split_paths(&path_env) {
         if !dir.is_dir() {
@@ -31,7 +33,11 @@ pub(crate) fn find_apps() -> HashMap<String, String> {
             if !is_executable(&full_path) {
                 continue;
             }
-            let name = entry.file_name().to_string_lossy().to_string();
+            let name = full_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string());
             if apps.contains_key(&name) {
                 continue;
             }
@@ -43,10 +49,15 @@ pub(crate) fn find_apps() -> HashMap<String, String> {
                         found = Some(caps[1].to_string());
                         break;
                     }
-                    // Try Windows batch file
                     if let Some(caps) = re_batch.captures(line.trim()) {
-                        found = Some(caps[1].to_string());
-                        break;
+                        let path = caps
+                            .get(1)
+                            .or_else(|| caps.get(2))
+                            .map(|m| m.as_str().to_string());
+                        if let Some(path) = path {
+                            found = Some(path);
+                            break;
+                        }
                     }
                 }
                 if let Some(path) = found {
@@ -70,20 +81,27 @@ fn is_executable(path: &Path) -> bool {
 
 #[cfg(not(unix))]
 fn is_executable(path: &Path) -> bool {
-    // On Windows, check for known executable/script extensions
-    // JetBrains uses .exe binaries and .bat wrapper scripts
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_lowercase());
-    matches!(ext.as_deref(), Some("exe") | Some("bat"))
+    matches!(ext.as_deref(), Some("exe") | Some("bat") | Some("cmd"))
 }
 
 pub(crate) fn resolve_options_path(binary_path: &str) -> Option<PathBuf> {
-    let bin_dir = Path::new(binary_path).parent()?;
-    let product = Path::new(binary_path).file_name()?.to_string_lossy();
+    let binary = Path::new(binary_path);
+    let bin_dir = binary.parent()?;
+    let binary_name = binary.file_name().and_then(|s| s.to_str())?;
+    let product = binary
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(binary_name);
+    let product = product.strip_suffix("64").unwrap_or(product);
 
     let candidates = [
+        bin_dir.join(format!("{binary_name}.vmoptions")),
+        bin_dir.join(format!("{product}64.exe.vmoptions")),
+        bin_dir.join(format!("{product}.exe.vmoptions")),
         bin_dir.join(format!("{product}64.vmoptions")),
         bin_dir.join(format!("{product}.vmoptions")),
     ];

@@ -1,5 +1,7 @@
 .idea
 .vscode
+.crush
 .DS_STORE
 
 target
+AGENTS.md

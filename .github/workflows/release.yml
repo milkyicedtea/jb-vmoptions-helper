@@ -1,0 +1,85 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Add macOS targets (Intel + ARM)
+      - name: Add macOS targets
+        if: matrix.os == 'macos-latest'
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+
+      # Build binaries
+      - name: Build release
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            cargo build --release --target x86_64-apple-darwin
+            cargo build --release --target aarch64-apple-darwin
+          else
+            cargo build --release
+          fi
+
+      # Package per OS
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p dist release
+
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cp target/release/jb-vmoptions-helper.exe dist/jb-vmoptions-helper-windows-x86_64.exe
+
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            # Create universal binary
+            lipo -create \
+              target/x86_64-apple-darwin/release/jb-vmoptions-helper \
+              target/aarch64-apple-darwin/release/jb-vmoptions-helper \
+              -output dist/jb-vmoptions-helper
+
+            strip dist/jb-vmoptions-helper || true
+            chmod +x dist/jb-vmoptions-helper
+
+            cp dist/jb-vmoptions-helper release/
+            tar czf dist/jb-vmoptions-helper-macos-universal.tar.gz -C release jb-vmoptions-helper
+
+          else
+            # Linux
+            cp target/release/jb-vmoptions-helper dist/jb-vmoptions-helper
+
+            strip dist/jb-vmoptions-helper
+            chmod +x dist/jb-vmoptions-helper
+
+            cp dist/jb-vmoptions-helper release/
+            tar czf dist/jb-vmoptions-helper-linux-x86_64.tar.gz -C release jb-vmoptions-helper
+          fi
+
+      # Upload to GitHub Release
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/jb-vmoptions-helper-linux-x86_64.tar.gz
+            dist/jb-vmoptions-helper-macos-universal.tar.gz
+            dist/jb-vmoptions-helper-windows-x86_64.exe
